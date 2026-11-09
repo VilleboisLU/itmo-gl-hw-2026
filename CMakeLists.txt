@@ -13,16 +13,13 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
 set(PROJECT_SOURCES
         main.cpp
-        window.cpp
-        window.h
-        textures/cat.jpg
+        window.h  window.cpp
+        scene.h   scene.cpp
 )
 
 add_executable(itmo-gl-hw-2026
     ${PROJECT_SOURCES}
     resources.qrc
-    shaders/template.fs
-    shaders/template.vs
     openglwidget.h openglwidget.cpp
 )
 

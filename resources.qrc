@@ -1,7 +1,8 @@
 <RCC>
     <qresource prefix="/">
-        <file>shaders/template.fs</file>
-        <file>shaders/template.vs</file>
-        <file>textures/cat.jpg</file>
+        <file>shaders/function.frag</file>
+        <file>shaders/function.vert</file>
+        <file>shaders/newton.frag</file>
+        <file>shaders/newton.vert</file>
     </qresource>
 </RCC>
