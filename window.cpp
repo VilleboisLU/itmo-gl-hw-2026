@@ -1,161 +1,177 @@
 #include "window.h"
 
+#include <memory>
+
+#include <QComboBox>
+#include <QDebug>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
+#include <QStackedWidget>
+#include <QToolButton>
+#include <QVBoxLayout>
 
-constexpr std::array<GLfloat, 21u> vertices = {
-    0.0f, 0.5f, 1.f,  0.f,  0.f,   0.5f, 1.0f, -0.5f, -0.5f, 0.f,  1.f,
-    0.f,  0.0f, 0.0f, 0.5f, -0.5f, 0.f,  0.f,  1.f,   1.0f,  0.0f,
-};
+#include "scene.h"
 
-constexpr std::array<GLuint, 3u> indices = {0, 1, 2};
+namespace {
 
-Window::Window()
-{
-    // Add label for FPS
-    auto* fpsLabel = new QLabel("FPS: 0", this);
-    fpsLabel->setStyleSheet("QLabel { color: white; }");
-    fpsLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    fpsLabel->adjustSize();
-    fpsLabel->move(0, 0);
-    fpsLabel->raise();
-
-    connect(this, &Window::fpsUpdated, [fpsLabel](double fps) {
-        fpsLabel->setText(QString("FPS: %1").arg(fps, 0, 'f', 0));
-        fpsLabel->adjustSize();
-    });
+void SelectPage(QStackedWidget* panel, int index) {
+  for (int i = 0; i < panel->count(); ++i) {
+    auto policy = (i == index) ? QSizePolicy::Preferred : QSizePolicy::Ignored;
+    panel->widget(i)->setSizePolicy(QSizePolicy::Preferred, policy);
+  }
+  panel->setCurrentIndex(index);
 }
 
-Window::~Window()
-{
-    texture_.reset();
-    program_.reset();
+}  // namespace
+
+Window::Window() {
+  scenes_.push_back(std::make_unique<FunctionScene>());
+  scenes_.push_back(std::make_unique<NewtonScene>());
+  SetupFpsLabel();
+  SetupOverlay();
 }
 
-void Window::onInit()
+Window::~Window() {
+  makeCurrent();
+  scenes_.clear();
+  doneCurrent();
+}
+
+void Window::onInit() {
+  qDebug() << scene().camera().ViewProjection(1.0f) << scene().camera().ScreenToWorld({0, 0}, {100, 100});
+  for (auto& s : scenes_) {
+    s->init();
+  }
+}
+
+void Window::onRender() {
+  scene().render(size() * devicePixelRatioF());
+  update();
+}
+
+void Window::onResize(const size_t width, const size_t height) {
+  glViewport(0, 0, static_cast<GLint>(width), static_cast<GLint>(height));
+}
+
+void Window::mousePressEvent(QMouseEvent *event)
 {
-    // Configure shaders
-    program_ = std::make_unique<QOpenGLShaderProgram>(this);
-    program_->addShaderFromSourceFile(QOpenGLShader::Vertex, ":/shaders/template.vs");
-    program_->addShaderFromSourceFile(QOpenGLShader::Fragment, ":/shaders/template.fs");
-    if (!program_->link()) {
-        qDebug() << "Ошибка линковки:" << program_->log();
+    if (event->button() == Qt::LeftButton) {
+        dragging_ = true;
+        last_mouse_pos_ = event->position();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
     }
-    program_->bind();
-
-    // Configure textures
-    texture_ = std::make_unique<QOpenGLTexture>(QImage(":/textures/cat.jpg"));
-    texture_->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-    texture_->setWrapMode(QOpenGLTexture::WrapMode::Repeat);
-    program_->setUniformValue("tex_2d", 0);
-
-    // Configure uniforms
-    mvpUniform_ = program_->uniformLocation("mvp");
-    colorUniform_ = program_->uniformLocation("color");
-    program_->setUniformValue(colorUniform_, QColor::fromHsv(0, 0, 255));
-
-    // Create VAO object
-    vao_.create();
-    vao_.bind();
-
-    // Create VBO
-    vbo_.create();
-    vbo_.bind();
-    vbo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-    vbo_.allocate(vertices.data(), static_cast<int>(vertices.size() * sizeof(GLfloat)));
-
-    // Create IBO
-    ibo_.create();
-    ibo_.bind();
-    ibo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-    ibo_.allocate(indices.data(), static_cast<int>(indices.size() * sizeof(GLuint)));
-
-    // Bind attributes
-    program_->enableAttributeArray(0);
-    program_->setAttributeBuffer(0, GL_FLOAT, 0, 2, static_cast<int>(7 * sizeof(GLfloat)));
-
-    program_->enableAttributeArray(1);
-    program_->setAttributeBuffer(1,
-                                 GL_FLOAT,
-                                 static_cast<int>(2 * sizeof(GLfloat)),
-                                 3,
-                                 static_cast<int>(7 * sizeof(GLfloat)));
-
-    program_->enableAttributeArray(2);
-    program_->setAttributeBuffer(2,
-                                 GL_FLOAT,
-                                 static_cast<int>(5 * sizeof(GLfloat)),
-                                 2,
-                                 static_cast<int>(7 * sizeof(GLfloat)));
-
-    // Release all
-    program_->release();
-
-    vao_.release();
-    vbo_.release();
-    ibo_.release();
-
-    // Start timer for animation (if needed)
-    timer_.start();
-
-    // Еnable depth test and face culling
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-
-    // Clear all FBO buffers
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    OpenGLWidget::mousePressEvent(event);
 }
 
-void Window::onRender()
+void Window::mouseMoveEvent(QMouseEvent *event)
 {
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    // Calculate MVP matrix
-    model_.setToIdentity();
-    model_.translate(0, 0, -1.5);
-    view_.setToIdentity();
-    const auto mvp = projection_ * view_ * model_;
-
-    // Bind shader program
-    program_->bind();
-
-    // Update uniform values
-    program_->setUniformValue(mvpUniform_, mvp);
-
-    if (animated_ && сolorAnimated_) {
-        const float dt = timer_.restart() / 1000.0f;
-        hue_ = std::fmod(hue_ + dt * (60.0f / 360.0f), 1.0f);
-        program_->setUniformValue(colorUniform_, QColor::fromHsvF(hue_, 1.0, 1.0));
-    }
-
-    // Add textures
-    glActiveTexture(GL_TEXTURE0);
-    texture_->bind();
-
-    // Bind VAO
-    vao_.bind();
-
-    // Draw
-    glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
-
-    // Release all
-    vao_.release();
-    program_->release();
-    texture_->release();
-
-    if (animated_)
+    if (dragging_ && (event->buttons() & Qt::LeftButton)) {
+        const QPointF pos = event->position();
+        scene().camera().Pan(last_mouse_pos_, pos, size());
+        last_mouse_pos_ = pos;
         update();
+        event->accept();
+        return;
+    }
+    OpenGLWidget::mouseMoveEvent(event);
 }
 
-void Window::onResize(const size_t width, const size_t height)
+void Window::mouseReleaseEvent(QMouseEvent *event)
 {
-    // Configure viewport
-    glViewport(0, 0, static_cast<GLint>(width), static_cast<GLint>(height));
-
-    // Configure matrix
-    const auto aspect = static_cast<float>(width) / static_cast<float>(height);
-    const auto zNear = 0.1f;
-    const auto zFar = 100.0f;
-    const auto fov = 60.0f;
-    projection_.setToIdentity();
-    projection_.perspective(fov, aspect, zNear, zFar);
+    if (event->button() == Qt::LeftButton && dragging_) {
+        dragging_ = false;
+        unsetCursor();
+        event->accept();
+        return;
+    }
+    OpenGLWidget::mouseReleaseEvent(event);
 }
+
+void Window::wheelEvent(QWheelEvent *event)
+{
+    const float steps = static_cast<float>(event->angleDelta().y()) / 120.0f;
+    if (steps == 0.0f) {
+        event->ignore();
+        return;
+    }
+    scene().camera().ZoomAt(event->position(), std::pow(1.1f, steps), size());
+    update();
+    event->accept();
+}
+
+void Window::SetupFpsLabel() {
+  auto* fps_label = new QLabel("FPS: 0", this);
+  fps_label->setStyleSheet("QLabel { color: white; }");
+  fps_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+  fps_label->adjustSize();
+  fps_label->move(0, 0);
+  fps_label->raise();
+
+  connect(this, &Window::fpsUpdated, [fps_label](double fps) {
+    fps_label->setText(QString("FPS: %1").arg(fps, 0, 'f', 0));
+    fps_label->adjustSize();
+  });
+}
+
+void Window::SetupOverlay() {
+  auto* overlay = new QWidget(this);
+  overlay->setAttribute(Qt::WA_StyledBackground);
+  overlay->setStyleSheet(
+      "QWidget { background: rgba(0, 0, 0, 140); color: white; }"
+      "QLabel { background: transparent; }");
+
+  auto* panel = CreateScenePanel(overlay);
+  auto* toggle = CreateToggleButton(overlay, panel);
+  auto* combo = CreateSceneCombo(overlay, panel);
+
+  auto* vbox = new QVBoxLayout(overlay);
+  auto* top_bar = new QHBoxLayout;
+  top_bar->addWidget(combo);
+  top_bar->addWidget(toggle);
+  vbox->addLayout(top_bar);
+  vbox->addWidget(panel);
+
+  overlay->adjustSize();
+  overlay->move(0, 20);
+  overlay->raise();
+}
+
+QStackedWidget* Window::CreateScenePanel(QWidget* parent) {
+  auto* panel = new QStackedWidget(parent);
+  for (auto& s : scenes_) {
+    panel->addWidget(s->CreateControls(panel, [this]() { update(); }));
+  }
+  SelectPage(panel, current_);
+  return panel;
+}
+
+QToolButton* Window::CreateToggleButton(QWidget* overlay, QWidget* panel) {
+  auto* toggle = new QToolButton(overlay);
+  toggle->setText("Слайдеры с параметрами");
+  toggle->setCheckable(true);
+  toggle->setChecked(true);
+  connect(toggle, &QToolButton::toggled, this, [panel, overlay](bool on) {
+    panel->setVisible(on);
+    overlay->adjustSize();
+  });
+  return toggle;
+}
+
+QComboBox* Window::CreateSceneCombo(QWidget* overlay, QStackedWidget* panel) {
+  auto* combo = new QComboBox(overlay);
+  for (const auto& s : scenes_) {
+    combo->addItem(s->name());
+  }
+  connect(combo, &QComboBox::currentIndexChanged, this,
+          [this, panel, overlay](int index) {
+            current_ = index;
+            SelectPage(panel, index);
+            overlay->adjustSize();
+            update();
+          });
+  return combo;
+}
+
